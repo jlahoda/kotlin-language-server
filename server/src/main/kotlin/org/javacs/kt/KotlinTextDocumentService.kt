@@ -111,9 +111,14 @@ class KotlinTextDocumentService(
         }
     }
 
-    override fun documentHighlight(position: TextDocumentPositionParams): CompletableFuture<List<DocumentHighlight>> {
-        TODO("not implemented")
-    }
+    override fun documentHighlight(position: TextDocumentPositionParams) = async.compute {
+        position.textDocument.filePath
+            ?.let { file ->
+                val content = sp.content(parseURI(position.textDocument.uri))
+                val offset = offset(content, position.position.line, position.position.character)
+                findReferences(file, offset, sp, true).map { DocumentHighlight(it.range) }
+            }
+        }
 
     override fun onTypeFormatting(params: DocumentOnTypeFormattingParams): CompletableFuture<List<TextEdit>> {
         TODO("not implemented")
@@ -229,7 +234,7 @@ class KotlinTextDocumentService(
             ?.let { file ->
                 val content = sp.content(parseURI(position.textDocument.uri))
                 val offset = offset(content, position.position.line, position.position.character)
-                findReferences(file, offset, sp)
+                findReferences(file, offset, sp, false)
             }
         }
 

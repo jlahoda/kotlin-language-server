@@ -1,13 +1,16 @@
 package org.javacs.kt.references
 
 import org.eclipse.lsp4j.Location
+import org.javacs.kt.CompiledFile
 import org.javacs.kt.LOG
 import org.javacs.kt.SourcePath
 import org.javacs.kt.position.location
 import org.javacs.kt.util.emptyResult
 import org.javacs.kt.util.findParent
+import org.javacs.kt.util.nullResult;
 import org.javacs.kt.util.preOrderTraversal
 import org.javacs.kt.util.toPath
+import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.descriptors.ClassConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
@@ -23,36 +26,57 @@ import org.jetbrains.kotlin.types.expressions.OperatorConventions
 import org.jetbrains.kotlin.util.OperatorNameConventions
 import java.nio.file.Path
 
-fun findReferences(file: Path, cursor: Int, sp: SourcePath): List<Location> {
-    return doFindReferences(file, cursor, sp)
+fun findReferences(file: Path, cursor: Int, sp: SourcePath, thisFileOnly : Boolean): List<Location> {
+    return (if (thisFileOnly) doFindLocalReferences(file, cursor, sp) else doFindGlobalReferences(file, cursor, sp))
             .map { location(it) }
             .filterNotNull()
             .toList()
 }
 
-private fun doFindReferences(file: Path, cursor: Int, sp: SourcePath): Collection<KtElement> {
+private fun doFindGlobalReferences(file: Path, cursor: Int, sp: SourcePath): Collection<PsiElement> {
     val recover = sp.currentVersion(file.toUri())
     val element = recover.elementAtPoint(cursor)?.findParent<KtNamedDeclaration>() ?: return emptyResult("No declaration at ${recover.describePosition(cursor)}")
     val declaration = recover.compile[BindingContext.DECLARATION_TO_DESCRIPTOR, element] ?: return emptyResult("Declaration ${element.fqName} has no descriptor")
     val maybes = possibleReferences(declaration, sp).map { it.toPath() }
     LOG.debug("Scanning {} files for references to {}", maybes.size, element.fqName)
     val recompile = sp.compileFiles(maybes.map(Path::toUri))
-
-    return when {
-        isComponent(declaration) -> findComponentReferences(element, recompile) + findNameReferences(element, recompile)
-        isIterator(declaration) -> findIteratorReferences(element, recompile) + findNameReferences(element, recompile)
-        isPropertyDelegate(declaration) -> findDelegateReferences(element, recompile) + findNameReferences(element, recompile)
-        else -> findNameReferences(element, recompile)
-    }
+    return doFindReferences(element, declaration, recompile, ::matchesReference);
 }
 
-private fun findNameReferences(element: KtNamedDeclaration, recompile: BindingContext): List<KtReferenceExpression> {
+private fun doFindLocalReferences(file: Path, cursor: Int, sp: SourcePath): Collection<PsiElement> {
+    val recover = sp.currentVersion(file.toUri())
+    val toFind = useAtPoint(recover, cursor) ?:
+                    declarationAtPoint(recover, cursor) ?:
+                        return emptyResult("No declaration descriptor found at ${recover.describePosition(cursor)}")
+    val recompile = sp.compileFiles(listOf(file.toUri()))
+    val toFindElement = toFind.findPsi()
+    return doFindReferences(toFind, toFind, recompile, ::matchesHighlightReference) + ((toFindElement as? KtNamedDeclaration)?.nameIdentifier?.let(::listOf)?:emptyList())
+}
+
+private fun <T> doFindReferences(element: T, elementDescriptor: DeclarationDescriptor, recompile: BindingContext, matchesReference: (DeclarationDescriptor, T) -> Boolean) = when {
+        isComponent(elementDescriptor) -> findComponentReferences(element, recompile, matchesReference) + findNameReferences(element, recompile, matchesReference)
+        isIterator(elementDescriptor) -> findIteratorReferences(element, recompile, matchesReference) + findNameReferences(element, recompile, matchesReference)
+        isPropertyDelegate(elementDescriptor) -> findDelegateReferences(element, recompile, matchesReference) + findNameReferences(element, recompile, matchesReference)
+        else -> findNameReferences(element, recompile, matchesReference)
+}
+
+private fun useAtPoint(compiled: CompiledFile, cursor: Int): DeclarationDescriptor? {
+    val (_, fromReference) = compiled.referenceAtPoint(cursor) ?: return null;
+    return fromReference;
+}
+
+private fun declarationAtPoint(compiled: CompiledFile, cursor: Int): DeclarationDescriptor? {
+    val element = compiled.elementAtPoint(cursor)?.findParent<KtNamedDeclaration>() ?: return null
+    return compiled.compile[BindingContext.DECLARATION_TO_DESCRIPTOR, element] ?: return nullResult("Declaration ${element.fqName} has no descriptor")
+}
+
+private fun <T> findNameReferences(element: T, recompile: BindingContext, matchesReference: (DeclarationDescriptor, T) -> Boolean): List<KtReferenceExpression> {
     val references = recompile.getSliceContents(BindingContext.REFERENCE_TARGET)
 
     return references.filter { matchesReference(it.value, element) }.map { it.key }
 }
 
-private fun findDelegateReferences(element: KtNamedDeclaration, recompile: BindingContext): List<KtElement> {
+private fun <T> findDelegateReferences(element: T, recompile: BindingContext, matchesReference: (DeclarationDescriptor, T) -> Boolean): List<KtElement> {
     val references = recompile.getSliceContents(BindingContext.DELEGATED_PROPERTY_RESOLVED_CALL)
 
     return references
@@ -60,7 +84,7 @@ private fun findDelegateReferences(element: KtNamedDeclaration, recompile: Bindi
             .map { it.value.call.callElement }
 }
 
-private fun findIteratorReferences(element: KtNamedDeclaration, recompile: BindingContext): List<KtElement> {
+private fun <T> findIteratorReferences(element: T, recompile: BindingContext, matchesReference: (DeclarationDescriptor, T) -> Boolean): List<KtElement> {
     val references = recompile.getSliceContents(BindingContext.LOOP_RANGE_ITERATOR_RESOLVED_CALL)
 
     return references
@@ -68,7 +92,7 @@ private fun findIteratorReferences(element: KtNamedDeclaration, recompile: Bindi
             .map { it.value.call.callElement }
 }
 
-private fun findComponentReferences(element: KtNamedDeclaration, recompile: BindingContext): List<KtElement> {
+private fun <T> findComponentReferences(element: T, recompile: BindingContext, matchesReference: (DeclarationDescriptor, T) -> Boolean): List<KtElement> {
     val references = recompile.getSliceContents(BindingContext.COMPONENT_RESOLVED_CALL)
 
     return references
@@ -178,6 +202,13 @@ private fun matchesReference(found: DeclarationDescriptor, search: KtNamedDeclar
         return search is KtClass && found.constructedClass.fqNameSafe == search.fqName
     else
         return found.findPsi() == search
+}
+
+private fun matchesHighlightReference(found: DeclarationDescriptor, search: DeclarationDescriptor): Boolean {
+    if (found is ConstructorDescriptor && found.isPrimary)
+        return search is ConstructorDescriptor && found.constructedClass.fqNameSafe == search.constructedClass.fqNameSafe
+    else
+        return found == search
 }
 
 private fun operatorNames(name: Name): List<KtSingleValueToken> =

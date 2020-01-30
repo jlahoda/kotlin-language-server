@@ -56,6 +56,7 @@ class KotlinLanguageServer : LanguageServer, LanguageClientAware, Closeable {
         serverCapabilities.completionProvider = CompletionOptions(false, listOf("."))
         serverCapabilities.signatureHelpProvider = SignatureHelpOptions(listOf("(", ","))
         serverCapabilities.definitionProvider = true
+        serverCapabilities.documentHighlightProvider = true
         serverCapabilities.documentSymbolProvider = true
         serverCapabilities.workspaceSymbolProvider = true
         serverCapabilities.referencesProvider = true

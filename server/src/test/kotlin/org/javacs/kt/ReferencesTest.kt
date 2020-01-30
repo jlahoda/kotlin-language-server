@@ -1,9 +1,11 @@
 package org.javacs.kt
 
+import org.eclipse.lsp4j.*
 import org.hamcrest.Matchers.*
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThat
 import org.junit.Test
-
+/*
 class ReferencesTest : SingleFileTestFixture("references", "ReferenceTo.kt") {
     @Test fun `find referencs to foo`() {
         val request = referenceParams(file, 2, 11)
@@ -194,3 +196,33 @@ class ReferenceOperatorUsingNameTest : SingleFileTestFixture("references", "Refe
         assertThat(references, hasItem(hasProperty("uri", containsString(file))))
     }
 }
+*/
+//class DocumentHighlight1 : SingleFileTestFixture("references", "ReferenceTo.kt") {
+class ReferencesTest : SingleFileTestFixture("references", "ReferenceTo.kt") {
+    @Test fun `find documentHighlights to various elements in`() {
+        run {
+            val request = textDocumentPosition(file, 9, 22)
+            val references = languageServer.textDocumentService.documentHighlight(request).get()
+
+            assertEquals(listOf(DocumentHighlight(Range(Position(8, 20), Position(8, 23))),
+                                DocumentHighlight(Range(Position(1, 8), Position(1, 11)))),
+                         references)
+        }
+        run {
+            val request = textDocumentPosition(file, 9, 22)
+            val references = languageServer.textDocumentService.documentHighlight(request).get()
+
+            assertEquals(listOf(DocumentHighlight(Range(Position(8, 20), Position(8, 23))),
+                                DocumentHighlight(Range(Position(1, 8), Position(1, 11)))),
+                         references)
+        }
+        run {
+            val request = textDocumentPosition(file, 7, 1)
+            val references = languageServer.textDocumentService.documentHighlight(request).get()
+
+            assertEquals(listOf<DocumentHighlight>(),
+                         references)
+        }
+    }
+}
+
